@@ -1,3 +1,4 @@
+#coding=utf-8
 '''
 Copyright (C) 2014 New York University
 
@@ -86,22 +87,22 @@ class machine(Machine):
         '''
         images = images.transpose((0,3,1,2))
         (nimgs, nc, nh, nw) = images.shape
-        assert (nc, nh, nw) == (3, 240, 320)
+        assert (nc, nh, nw) == (3, 240, 320)#网络的输出图片数据为(1,3, 240, 320)
 
-        (input_h, input_w) = self.input_size
-        (output_h, output_w) = self.output_size
+        (input_h, input_w) = self.input_size#网络输入feature map 图片的大小
+        (output_h, output_w) = self.output_size#网络输出feature map大小
 
         bsize = self.bsize
         b = 0
 
-        # theano function for inference
+        # pred_depth为输出，Tensor 类型变量，
         v = self.vars
         pred_depth = self.inverse_depth_transform(self.fine.pred_mean)
         infer_f = theano.function([v.images], pred_depth)
 
         depths = np.zeros((nimgs, output_h, output_w), dtype=np.float32)
 
-        # crop region (from random translations in training)
+        # 一张图片的中心 bbox ，(i0, i1)为矩形的左上角、(j0, j1)为矩形的右下角
         dh = nh - input_h
         dw = nw - input_w
         (i0, i1) = (dh/2, nh - dh/2)
@@ -144,13 +145,13 @@ class machine(Machine):
                 off_w, off_w + input_w)
 
     def define_machine(self):
-        self.orig_input_size = (240, 320) # before data transforms
-        self.input_size = (228, 304) # after data transforms
-        self.output_size = self.conf.geteval('full2', 'output_size')
+        self.orig_input_size = (240, 320) #
+        self.input_size = (228, 304) # 采用random crop的方法吗
+        self.output_size = self.conf.geteval('full2', 'output_size')#获取配置文件中，full2层下的选项output_size
 
         (input_h, input_w) = self.input_size
         (output_h, output_w) = self.output_size
-
+        #因为输出与输出的比例是4倍，所以我们需要回溯输入图片对应的区域
         self.target_crop = input_h - output_h * 4
         assert self.target_crop == input_w - output_w * 4
 
@@ -173,8 +174,8 @@ class machine(Machine):
         # downsample depth and mask by 4x
         m0 = m0[:,1::4,1::4]
         y0 = y0[:,1::4,1::4]
-
-        # features for coarse stack from imagenet
+    #构建网络
+        # 这一部分的网络是粗网络的前半部分，结构与Alexnet相同。因为文献的部分参数采用的是Alexnet训练好的模型参数，然后在进行fine-tuning
         self.define_imagenet_stack(x0)
 
         # pretrained features are rather large, rescale down to nicer range
@@ -182,7 +183,7 @@ class machine(Machine):
         imnet_feats = imnet_r5.reshape((
                             self.bsize, T.prod(imnet_r5.shape[1:])))
 
-        # rest of coarse stack
+        # 这一部分的网络是粗网络的后半部分
         self.define_coarse_stack(imnet_feats)
 
         # fine stack
@@ -220,8 +221,9 @@ class machine(Machine):
         test_values['masks'] = \
             np.ones(test_depths_size, dtype=np.float32)
         return test_values
-
+    #在coarse部分，与Alexnet相同的部分
     def define_imagenet_stack(self, x0):
+        print "create net"
         conv1 = self.create_unit('imnet_conv1')
         pool1 = self.create_unit('imnet_pool1')
         conv2 = self.create_unit('imnet_conv2')
@@ -233,7 +235,7 @@ class machine(Machine):
 
         z1 = conv1.infer(x0 - 128)
         (p1, s1) = pool1.infer(z1)
-        r1 = cmrnorm(relu(p1))
+        r1 = cmrnorm(relu(p1))#局部对比度归一化层？
 
         z2 = conv2.infer(r1)
         (p2, s2) = pool2.infer(z2)
@@ -249,20 +251,7 @@ class machine(Machine):
         (p5, s5) = pool5.infer(z5)
         r5 = relu(p5)
 
-        #r5_vec = r5.reshape((r5.shape[0], T.prod(r5.shape[1:])))
-        #full6 = self.create_unit('imnet_full6',
-        #                         ninput=test_shape(r5_vec)[1]))
-        #z6 = 0.5 * full6.infer(r5_vec)
-        #r6 = relu(z6)
 
-        #full7 = self.create_unit('imnet_full7', ninput=test_shape(r6)[1])
-        #z7 = 0.5 * full7.infer(r6)
-        #r7 = relu(z7)
-
-        #full8 = self.create_unit('imnet_full8', ninput=test_shape(r7)[1])
-        #z8 = full8.infer(r7)
-
-        #output = softmax(z8, axis=1)
 
         self.imagenet = MachinePart(locals())
 
@@ -321,7 +310,7 @@ class machine(Machine):
         pred_mean = z_s2_3_mean[:,0,:,:]
 
         self.fine = MachinePart(locals())
-
+    #定义损失函数 这个会不会就是文献的创新点呢？缩放不变的损失函数
     def define_cost(self, pred, y0, m0):
         bsize = self.bsize
         npix = int(np.prod(test_shape(y0)[1:]))

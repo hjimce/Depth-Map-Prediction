@@ -1,3 +1,4 @@
+#coding=utf-8
 '''
 Copyright (C) 2014 New York University
 
@@ -52,11 +53,10 @@ theano_rng = theano.tensor.shared_randomstreams.RandomStreams()
 
 xx = np.newaxis
 
-### Math and nnet util functions ###
-
+#网络结构，relu 激活函数
 def relu(x):
     return maximum(0, x)
-
+#softmat 层
 def softmax(x, axis=None):
     '''
     Applies softmax to x over the given axis (i.e. exp/sum(exp)).
@@ -68,7 +68,7 @@ def softmax(x, axis=None):
     exp_x = T.exp(x - m)
     Z = T.sum(exp_x, axis=axis, keepdims=True)
     return exp_x / Z
-
+#log softmax 层，输入数据x
 def logsoftmax(x, axis=None):
     '''
     Applies logsoftmax to x over the given axis (i.e. exp/sum(exp)).
@@ -82,19 +82,17 @@ def logsoftmax(x, axis=None):
     return x - m - T.log(Z)
 
 _mm_enable_compatibility_padding = True
-
+#卷积层，输入图片数据x，k为滤波器，stride 为卷积跨步
 def conv_theano_mm(x, k, border_mode, transpose=False, stride=1):
-    '''
-    Convolves images x with filters k.
-    x has shape (bsize, xchan, h, w)
-    k has shape (nfilt, xchan, filt_h, filt_w)
-    '''
+    #输入图片x： (bsize, xchan, h, w)
+    #k为滤波器：(nfilt, xchan, filt_h, filt_w)
+
     (xh, xw) = test_shape(x)[-2:]
     (kh, kw) = test_shape(k)[-2:]
 
     if border_mode == 'valid':
         pad = (0,0)
-    elif border_mode == 'same':
+    elif border_mode == 'same':#卷积后的图片大小与原图片的大小相同，因此左右两边都要加上卷积核宽度的一半
         pad = (kh // 2, kw // 2)
     elif border_mode == 'full':
         pad = (kh - 1, kw - 1)
@@ -102,6 +100,7 @@ def conv_theano_mm(x, k, border_mode, transpose=False, stride=1):
         raise ValueError(border_mode)
 
     if stride != 1 and not transpose and _mm_enable_compatibility_padding:
+        print 'True'
         # semi-compatibility with cudaconv
         # cudaconv strided convs go one filter tile past the end at the
         # bottom/right.  Get the same size with some extra padding if needed.
@@ -128,7 +127,6 @@ def conv_theano_mm(x, k, border_mode, transpose=False, stride=1):
                         subsample=(stride, stride)) \
                     (x, k)
     return res
-
 conv = conv_theano_mm
 
 def upsample_bilinear(x, scale):
@@ -193,7 +191,7 @@ class Machine(object):
         self.state_dir = logutil.Subdir(state_subdir_name)
         self.units = []
         self.define_machine(**kwargs)
-
+    #根据配置参数，创建网络的每一层
     def create_unit(self, sec, cls=None, name=None, load_key=None, **kwargs):
         conf_sec = self.conf.get_section(sec)
         if cls is None:
@@ -202,6 +200,7 @@ class Machine(object):
             name = sec
         if load_key is None:
             load_key = conf_sec.get('load_key', name)
+
         kwargs['name'] = name
         kwargs['load_key'] = load_key
         kwargs['machine'] = self
@@ -251,15 +250,18 @@ def import_module(mod_file, modpath=''):
                 os.path.realpath(modpath)), 'module path does not match'
     return mod
 
-
+#加载网络模型
 def create_machine(module_fn, config_fn, params_dir=None,
                    edit_conf=None, load_saved_params=True):
     
-    # get configuration
+    #读取网络结构 配置文件包 ConfigParser
     conf = configuration.read_config(config_fn)
+
+    s=conf.sections()
+    print 'section:',s
     conf.set_eval_environ(section='config')
 
-    # edit conf to load params from load dir
+    #加载网络模型训练好的参数
     if load_saved_params:
         assert params_dir, 'must supply params dir'
         if not conf.has_section('load'):
@@ -394,20 +396,21 @@ class Unit(object):
         for (k, x) in self.tie_params.iteritems():
             setattr(self, k, x)
 
-        # load the params file, if we found one
+        # 参数加载 如果params_file不为 None ,那么我们就加载参数文件
         if params_file is not None:
             assert case != 'none'
             self.load_params(params_file)
             self.loaded = case in ('in_config', 'load_key', 'load_default')
             self.resumed = case in ('resume_current',)
             self.init_from_load = case in ('init_key', 'init_default')
+        #如果为None，那么我们就采用初始化的方法
         else:
             self.params = []
             self._init_params(*args, **kwargs)
             self.loaded = False
             self.resumed = False
             self.init_from_load = False
-
+    #参数保存
     def _save_params(self, dir=None, fn=None, attrs=[]):
         if fn is None:
             fn = self._params_filename()
@@ -419,13 +422,15 @@ class Unit(object):
             pdict['params'] = [p.name for p in self.params]
         with logutil.open(fn, 'w') as f:
             cPickle.dump(pdict, f, cPickle.HIGHEST_PROTOCOL)
-
+    #根据文件名，加载参数模型,记住是文件名，而不是文件夹名
     def _load_params(self, fn):
         _log.info('Loading parameters from %s' % fn)
+
         with logutil.consistent_dir(os.path.dirname(fn)):
             with open(fn, 'r') as f:
                 pdict = cPickle.load(f)
         params = pdict.pop('params', [])
+
         for (name, value) in pdict.iteritems():
             setattr(self, name, value)
         self.params = [pdict[x] for x in params]
@@ -493,68 +498,75 @@ class Unit(object):
 
         return OrderedDict(gupdates.items() + pupdates.items())
 
-
+#最大池化
 @register_unit_class
 class MaxPool(Unit):
+    #加载配置文件的相关参数
     def __init__(self, conf, **kwargs):
         Unit.__init__(self, conf, **kwargs)
         self.conf = conf
         self.vis_shape = kwargs.get('vis_shape', None)
         self.poolsize = self.conf.geteval('poolsize', None)
         self.poolstride = self.conf.geteval('poolstride', None)
-
+    #池化操作计算，输入图片y，进行最大池化
     def pool(self, y):
+        print "pool"
         '''apply pooling to unpooled output'''
         if self.vis_shape is None:
             self.vis_shape = test_shape(y)[-2:]
-        (p_y, p_inds) = pooling.maxpool2d(y, winsize=self.poolsize,
-                                             stride=self.poolstride)
+        (p_y, p_inds) = pooling.maxpool2d(y, winsize=self.poolsize,stride=self.poolstride)
+
         return (p_y, p_inds)
 
     infer = pool
-
-    def unpool(self, y, inds):
-        '''unpool pooled output'''
-        y = pooling.index_unpool_2d(y, inds,
-                                    winsize=self.poolsize,
-                                    stride=self.poolstride,
-                                    output_shape=self.vis_shape[-2:])
-        return y
-
-
-@register_unit_class
-class SumPool(Unit):
-    def __init__(self, conf, **kwargs):
-        Unit.__init__(self, conf, **kwargs)
-        self.conf = conf
-        self.vis_shape = kwargs.get('vis_shape', None)
-        self.average = self.conf.getboolean('average', False)
-        self.poolsize = self.conf.geteval('poolsize', None)
-        self.poolstride = self.conf.geteval('poolstride', None)
-
-    def pool(self, y):
-        '''apply pooling to unpooled output'''
-        self.vis_shape = self.vis_shape or test_shape(y)[-2:]
-        p_y = pooling.sumpool2d(y, winsize=self.poolsize,
-                                   stride=self.poolstride,
-                                   average=self.average)
-        return p_y
-
-    infer = pool
-
-    def unpool(self, y):
-        '''unpool pooled output'''
-        y = pooling.sum_unpool_2d(y,
-                                  winsize=self.poolsize,
-                                  stride=self.poolstride,
-                                  average=self.average,
-                                  output_shape=self.vis_shape[-2:])
-        return y
+    # #这个函数是反卷积要用的函数，可能paper一开始的思想是模仿FCN等网络的思想，所以才有了这个函数，本篇paper中没有用到，所以可以把它注释掉
+    # def unpool(self, y, inds):
+    #     print "unpool"
+    #     '''unpool pooled output'''
+    #     y = pooling.index_unpool_2d(y, inds,
+    #                                 winsize=self.poolsize,
+    #                                 stride=self.poolstride,
+    #                                 output_shape=self.vis_shape[-2:])
+    #     return y
 
 
+# @register_unit_class
+# class SumPool(Unit):
+#     def __init__(self, conf, **kwargs):
+#         Unit.__init__(self, conf, **kwargs)
+#         self.conf = conf
+#         self.vis_shape = kwargs.get('vis_shape', None)
+#         self.average = self.conf.getboolean('average', False)
+#         self.poolsize = self.conf.geteval('poolsize', None)
+#         self.poolstride = self.conf.geteval('poolstride', None)
+#
+#     def pool(self, y):
+#         print "unpool"
+#         '''apply pooling to unpooled output'''
+#         self.vis_shape = self.vis_shape or test_shape(y)[-2:]
+#         p_y = pooling.sumpool2d(y, winsize=self.poolsize,
+#                                    stride=self.poolstride,
+#                                    average=self.average)
+#         return p_y
+#
+#     infer = pool
+#
+#     def unpool(self, y):
+#         print "unpool"
+#         '''unpool pooled output'''
+#         y = pooling.sum_unpool_2d(y,
+#                                   winsize=self.poolsize,
+#                                   stride=self.poolstride,
+#                                   average=self.average,
+#                                   output_shape=self.vis_shape[-2:])
+#         return y
+
+#卷积层
 @register_unit_class
 class Conv(Unit):
+    #根据配置文件，获取相关的参数
     def __init__(self, conf, init_W=None, **kwargs):
+
         Unit.__init__(self, conf, **kwargs)
         self.conf = conf
         assert self.conf.get('type') == 'conv'
@@ -566,7 +578,7 @@ class Conv(Unit):
         self.stride = self.conf.getint('stride', 1)
 
         self.init_params(init_W)
-
+    #本层网络参数初始化
     def _init_params(self, init_W, tie_params):
         (nfilt, fc, fi, fj) = self.filter_shape
 
@@ -583,10 +595,10 @@ class Conv(Unit):
             self.b = theano.shared(init_b + np.zeros(nb, dtype=floatX),
                                    name='b')
             self.params.append(self.b)
-
+    #计算网络的输出
     def infer(self, x):
         (nfilt, fc, fi, fj) = self.filter_shape
-        if (fi, fj) == (1, 1):
+        if (fi, fj) == (1, 1):#如果卷积核的大小为1*1的情况
             W = self.W.reshape((nfilt, fc))
             (bsize, nc, ni, nj) = x.shape
             xvec = x.transpose((1,0,2,3)).reshape((nc, bsize*ni*nj))
@@ -597,7 +609,7 @@ class Conv(Unit):
                 y = T.dot(W, xvec)
                 y = y.reshape((nfilt, bsize, ni, nj)).transpose((1,0,2,3))
             y = thutil.gpu_contiguous(y)
-        else:
+        else:#正常的卷积层
             y = conv(x, self.W, border_mode=self.conv_mode,
                                 transpose=self.transpose,
                                 stride=self.stride)
@@ -605,21 +617,22 @@ class Conv(Unit):
             y += self.b.reshape((1, self.b.shape[0], 1, 1))
         return y
 
-
+#全连接层
 @register_unit_class
 class Full(Unit):
+    #权连接层的输入神经元个数ninput。然后通过conf可以获取本层神经元的个数
     def __init__(self, conf, ninput, init_W=None, **kwargs):
         Unit.__init__(self, conf, **kwargs)
         self.conf = conf
         assert self.conf.get('type') == 'full'
 
-        self.ninput = ninput
-        self.noutput = self.conf.getint('noutput')
+        self.ninput = ninput#输入个数
+        self.noutput = self.conf.getint('noutput')#输出个数
         self.transpose = self.conf.getboolean('transpose', False)
         self.have_bias = self.conf.getboolean('bias', True)
 
         self.init_params(init_W)
-
+    #参数初始化
     def _init_params(self, init_W, tie_params):
         if 'W' not in tie_params:
             if init_W is None:
@@ -635,7 +648,7 @@ class Full(Unit):
             self.bias = theano.shared(init_b + np.zeros(nbias, dtype=floatX),
                                       name='bias')
             self.params.append(self.bias)
-
+    #网络输出计算
     def infer(self, x):
         W = self.W
         if self.transpose:
